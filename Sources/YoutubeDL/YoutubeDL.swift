@@ -584,9 +584,9 @@ open class YoutubeDL: NSObject {
             pythonObject = try await makePythonObject()
         }
 
-        print(#function, url)
+        // print(#function, url)
         let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: ["": url.absoluteString, "download": false, "process": true])
-        print(info)
+        // print(info)
 //        print(#function, "throttled:", pythonObject.throttled)
         
         let format_selector = pythonObject.build_format_selector(options!["format"])
