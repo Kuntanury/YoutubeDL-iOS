@@ -80,6 +80,7 @@ public struct Info: Codable {
     public var playlist_index: Int?
     public var thumbnail: String?
     public var display_id: String?
+    public var fulltitle: String?
     public var duration_string: String?
     public var requested_subtitles: [String]?
     public var __has_drm: Bool?
