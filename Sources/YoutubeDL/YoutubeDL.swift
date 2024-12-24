@@ -609,6 +609,18 @@ open class YoutubeDL: NSObject {
         return (formats, try decoder.decode(Info.self, from: info))
     }
     
+    open func getInfo(url: URL) async throws -> (Info) {
+        let pythonObject: PythonObject
+        if let _pythonObject = self.pythonObject {
+            pythonObject = _pythonObject
+        } else {
+            pythonObject = try await makePythonObject()
+        }
+        let decoder = PythonDecoder()
+        let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: ["": url.absoluteString, "": false, "": true])
+        return (try decoder.decode(Info.self, from: info))
+    }
+    
     func tryMerge(directory: URL, title: String, timeRange: TimeRange?) -> Bool {
         let t0 = ProcessInfo.processInfo.systemUptime
        
