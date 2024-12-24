@@ -84,6 +84,8 @@ public struct Info: Codable {
     public var duration_string: String?
     public var requested_subtitles: [String]?
     public var __has_drm: Bool?
+    
+    public var subtitles: Dictionary<String, [Ext]>
 }
 
 public extension Info {
@@ -145,6 +147,12 @@ public extension Format {
     var isAudioOnly: Bool { vcodec == "none" }
     
     var isVideoOnly: Bool { acodec == "none" }
+}
+
+public struct Ext: Codable {
+    public var ext: String?
+    public var url: String?
+    public var name: String?
 }
 
 public let defaultOptions: PythonObject = [
