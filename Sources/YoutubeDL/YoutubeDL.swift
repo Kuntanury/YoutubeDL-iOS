@@ -617,7 +617,7 @@ open class YoutubeDL: NSObject {
             pythonObject = try await makePythonObject()
         }
         let decoder = PythonDecoder()
-        let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: ["": url.absoluteString, "": false, "": true])
+        let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: ["": url.absoluteString, "download": false, "process": true])
         return (try decoder.decode(Info.self, from: info))
     }
     
