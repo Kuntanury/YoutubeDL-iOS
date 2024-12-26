@@ -85,6 +85,9 @@ public struct Info: Codable {
     public var requested_subtitles: [String]?
     public var __has_drm: Bool?
     
+    public var language: String?
+    public var media_type: String?
+    
     public var subtitles: Dictionary<String, [Ext]>
 }
 
