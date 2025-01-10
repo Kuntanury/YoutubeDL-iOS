@@ -32,16 +32,10 @@ import FFmpegSupport
 let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
 
 func loadSymbol<T>(_ name: String) -> T {
-    guard let symbol = dlsym(RTLD_DEFAULT, name) else {
-        fatalError("Failed to load symbol: \(name)")
-    }
     unsafeBitCast(dlsym(RTLD_DEFAULT, name), to: T.self)
 }
 
 let Py_IsInitialized: @convention(c) () -> Int32 = loadSymbol("Py_IsInitialized")
-
-@_silgen_name("Py_IsInitialized")
-func Py_IsInitializedC() -> Int32
 
 public struct Info: Codable {
     public var id: String
