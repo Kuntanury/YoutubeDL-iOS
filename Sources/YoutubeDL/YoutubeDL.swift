@@ -281,8 +281,8 @@ open class YoutubeDL: NSObject {
     
     func loadPythonModule(downloadPythonModule: Bool = true) async throws -> PythonObject {
         PythonSupport.initialize()
-        if Py_IsInitialized() == 0 {
-        }
+//        if Py_IsInitialized() == 0 {
+//        }
         
         if !FileManager.default.fileExists(atPath: Self.pythonModuleURL.path) {
             guard downloadPythonModule else {
