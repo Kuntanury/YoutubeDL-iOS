@@ -343,11 +343,6 @@ open class YoutubeDL: NSObject {
         
         let subprocess = Python.import("subprocess")
         subprocess.Popen.handler = handler.pythonObject
-        
-        runSimpleString("""
-            # Check if handler is now injected
-            print('Handler after injection:', getattr(subprocess.Popen, 'handler', None))
-        """)
     }
     
     lazy var popenHandler = PythonFunction { args in
