@@ -292,24 +292,24 @@ open class YoutubeDL: NSObject {
         }
         
         let sys = try Python.attemptImport("sys")
-        log = log + "Python sys.path: \(sys.path) \n"
+        VideoURLInputViewLog = VideoURLInputViewLog + "Python sys.path: \(sys.path) \n"
         if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
-            log += "Self.pythonModuleURL.path: \(Self.pythonModuleURL.path) \n"
-            log += "Python sys.path: \(sys.path) \n"
+            VideoURLInputViewLog = VideoURLInputViewLog + "Self.pythonModuleURL.path: \(Self.pythonModuleURL.path) \n"
+            VideoURLInputViewLog += VideoURLInputViewLog + "Python sys.path: \(sys.path) \n"
             injectFakePopen(handler: popenHandler)
             
             sys.path.insert(1, Self.pythonModuleURL.path)
         }
         
         let pythonModule = try Python.attemptImport("yt_dlp")
-        log = log + "Python yt_dlp.path: \(pythonModule.description) \n"
+        VideoURLInputViewLog = VideoURLInputViewLog + "Python yt_dlp.path: \(pythonModule.description) \n"
         version = String(pythonModule.version.__version__)
-        log = log + "Python pythonModule.version: \(version) \n"
+        VideoURLInputViewLog = VideoURLInputViewLog + "Python pythonModule.version: \(version) \n"
         return pythonModule
     }
     
     func injectFakePopen(handler: PythonFunction) {
-        log = log + "Self.pythonModuleURL.path: \(Self.pythonModuleURL.path) \n"
+        VideoURLInputViewLog = VideoURLInputViewLog + "Self.pythonModuleURL.path: \(Self.pythonModuleURL.path) \n"
         runSimpleString("""
             import errno
             import os
