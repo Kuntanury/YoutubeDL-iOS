@@ -293,6 +293,8 @@ open class YoutubeDL: NSObject {
         
         let sys = try Python.attemptImport("sys")
         if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
+            print("Self.pythonModuleURL.path: \(Self.pythonModuleURL.path)")
+            print("Python sys.path: \(sys.path)")
             injectFakePopen(handler: popenHandler)
             
             sys.path.insert(1, Self.pythonModuleURL.path)
