@@ -335,10 +335,10 @@ open class YoutubeDL: NSObject {
             
             import subprocess
             subprocess.Popen = Pop
-            print("subprocess.Popen successfully replaced")
+            print('subprocess.Popen successfully replaced?')
             
             # Check if handler is correctly injected
-            print("Handler before injection:", getattr(subprocess.Popen, 'handler', None))
+            print('Handler before injection:', getattr(subprocess.Popen, 'handler', None))
             """)
         
         let subprocess = Python.import("subprocess")
@@ -346,7 +346,7 @@ open class YoutubeDL: NSObject {
         
         runSimpleString("""
             # Check if handler is now injected
-            print("Handler after injection:", getattr(subprocess.Popen, 'handler', None))
+            print('Handler after injection:', getattr(subprocess.Popen, 'handler', None))
         """)
     }
     
