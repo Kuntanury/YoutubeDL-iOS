@@ -301,7 +301,9 @@ open class YoutubeDL: NSObject {
         }
         
         let pythonModule = try Python.attemptImport("yt_dlp")
+        print("Python yt_dlp.path: \(pythonModule.path)")
         version = String(pythonModule.version.__version__)
+        print("Python pythonModule.version: \(version)")
         return pythonModule
     }
     
