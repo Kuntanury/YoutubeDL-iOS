@@ -292,23 +292,24 @@ open class YoutubeDL: NSObject {
         }
         
         let sys = try Python.attemptImport("sys")
-        print("Python sys.path: \(sys.path)")
+        log += "Python sys.path: \(sys.path) \n"
         if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
-            print("Self.pythonModuleURL.path: \(Self.pythonModuleURL.path)")
-            print("Python sys.path: \(sys.path)")
+            log += "Self.pythonModuleURL.path: \(Self.pythonModuleURL.path) \n"
+            log += "Python sys.path: \(sys.path) \n"
             injectFakePopen(handler: popenHandler)
             
             sys.path.insert(1, Self.pythonModuleURL.path)
         }
         
         let pythonModule = try Python.attemptImport("yt_dlp")
-        print("Python yt_dlp.path: \(pythonModule.description)")
+        log += "Python yt_dlp.path: \(pythonModule.description) \n"
         version = String(pythonModule.version.__version__)
-        print("Python pythonModule.version: \(version)")
+        log += "Python pythonModule.version: \(version) \n"
         return pythonModule
     }
     
     func injectFakePopen(handler: PythonFunction) {
+        log += "Self.pythonModuleURL.path: \(Self.pythonModuleURL.path) \n"
         runSimpleString("""
             import errno
             import os
