@@ -309,6 +309,7 @@ open class YoutubeDL: NSObject {
             import os
             
             class Pop:
+                handler = None
                 def __init__(self, *args, **kwargs):
                     print('Popen.__init__:', self, args)#, kwargs)
                     if args[0][0] in ['ffmpeg', 'ffprobe']:
