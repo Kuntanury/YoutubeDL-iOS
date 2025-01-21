@@ -195,7 +195,7 @@ open class YoutubeDL: NSObject {
         var transcodePending: Bool
     }
     
-    public static let latestDownloadURL = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
+    public static let latestDownloadURL = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/download/2025.01.15/yt-dlp")!
     
     public static var pythonModuleURL: URL = {
         guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
