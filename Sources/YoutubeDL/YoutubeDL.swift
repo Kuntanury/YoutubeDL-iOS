@@ -863,7 +863,7 @@ extension URLSessionDownloadTask {
 }
 
 // https://github.com/yt-dlp/yt-dlp/blob/4f08e586553755ab61f64a5ef9b14780d91559a7/yt_dlp/YoutubeDL.py#L338
-public func yt_dlp(argv: [String], progress: (([String: PythonObject]) -> Void)? = nil, log: ((String, String) -> Void)? = nil, makeTranscodeProgressBlock: (() -> ((Double) -> Void)?)? = nil) async throws {
+public func yt_dlp(argv: [String], progress: (([String: PythonObject]) throws -> Void)? = nil, log: ((String, String) -> Void)? = nil, makeTranscodeProgressBlock: (() -> ((Double) -> Void)?)? = nil) async throws {
     let context = Context()
     let yt_dlp = try await YtDlp(context: context)
     
@@ -941,10 +941,10 @@ public func makeLogger(name: String, _ log: @escaping (String, String) -> Void) 
         .pythonObject()
 }
 
-public func makeProgressHook(_ progress: @escaping ([String: PythonObject]) -> Void) -> PythonObject {
+public func makeProgressHook(_ progress: @escaping ([String: PythonObject]) throws -> Void) -> PythonObject {
     PythonFunction { (d: PythonObject) in
         let dict: [String: PythonObject] = Dictionary(d) ?? [:]
-        progress(dict)
+        try progress(dict)
         return Python.None
     }
         .pythonObject
