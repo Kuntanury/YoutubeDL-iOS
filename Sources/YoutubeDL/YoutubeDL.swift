@@ -161,7 +161,7 @@ public struct Ext: Codable {
 public let defaultOptions: PythonObject = [
     "format": "bestvideo,bestaudio[ext=m4a]/best",
     "nocheckcertificate": true,
-    "verbose": false,
+    "verbose": true,
 ]
 
 public enum YoutubeDLError: Error {
