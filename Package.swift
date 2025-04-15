@@ -12,7 +12,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/kewlbear/FFmpeg-iOS-Lame", from: "0.0.6-b20230730-000000"),
-        .package(url: "https://github.com/pvieito/PythonKit.git", from: "0.3.1"),
+//        .package(url: "https://github.com/pvieito/PythonKit.git", from: "0.3.1"),
+        .package(url: "https://github.com/pvieito/PythonKit.git", from: "master"),
         .package(url: "https://github.com/kewlbear/Python-iOS.git", from: "0.1.1-b"),
     ],
     targets: [
