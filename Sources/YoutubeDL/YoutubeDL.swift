@@ -186,6 +186,8 @@ open class YoutubeDL: NSObject {
 
     internal var options: PythonObject?
     
+    private let ytDlpVersionKey = "yt_dlp_version"
+    
     public override init() {
         super.init()
     }
@@ -195,11 +197,20 @@ open class YoutubeDL: NSObject {
             PythonSupport.initialize()
         }
         
-        if !FileManager.default.fileExists(atPath: Self.pythonModuleURL.path) {
-            guard downloadPythonModule else {
-                throw YoutubeDLError.noPythonModule
+        do {
+            let latestVersion = try await Self.fetchLatestYtDlpVersionFromGitHub()
+            let localVersion = self.getLocalVersion()
+            if localVersion == nil || latestVersion != localVersion {
+                try await Self.downloadPythonModule()
+                self.setLocalVersion(latestVersion)
             }
-            try await Self.downloadPythonModule()
+        } catch {
+            if !FileManager.default.fileExists(atPath: Self.pythonModuleURL.path) {
+                guard downloadPythonModule else {
+                    throw YoutubeDLError.noPythonModule
+                }
+                try await Self.downloadPythonModule()
+            }
         }
         
         let sys = try Python.attemptImport("sys")
@@ -212,6 +223,44 @@ open class YoutubeDL: NSObject {
         let pythonModule = try Python.attemptImport("yt_dlp")
         version = String(pythonModule.version.__version__)
         return pythonModule
+    }
+    
+    public static func fetchLatestYtDlpVersionFromGitHub() async throws -> String {
+        let url = URL(string: "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")!
+        
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("TransGull/1.0", forHTTPHeaderField: "User-Agent")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NSError(domain: "GitHubAPIError", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "GitHub API 返回状态码 \(httpResponse.statusCode)"
+            ])
+        }
+        
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tagName = json["tag_name"] as? String else {
+            throw NSError(domain: "GitHubAPIError", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "无法解析 GitHub API 响应"
+            ])
+        }
+        
+        return tagName.replacingOccurrences(of: "v", with: "")
+    }
+    
+    func getLocalVersion() -> String? {
+        UserDefaults.standard.string(forKey: ytDlpVersionKey)
+    }
+
+    func setLocalVersion(_ version: String) {
+        UserDefaults.standard.set(version, forKey: ytDlpVersionKey)
     }
     
     func injectFakePopen(handler: PythonFunction) {
