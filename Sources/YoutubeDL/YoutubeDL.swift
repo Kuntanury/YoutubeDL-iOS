@@ -87,6 +87,7 @@ public struct Info: Codable {
     public var media_type: String?
     
     public var subtitles: Dictionary<String, [Ext]>
+    public var url: String?
 }
 
 public extension Info {

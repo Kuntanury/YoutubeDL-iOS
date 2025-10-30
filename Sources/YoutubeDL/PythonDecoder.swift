@@ -24,7 +24,7 @@ struct _PythonDecoder: Decoder {
     var userInfo: [CodingUserInfoKey : Any] = [:]
     
     func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey {
-        KeyedDecodingContainer(_KeyedDecodingContainer(dict: Dictionary(pythonObject)!, codingPath: codingPath))
+        KeyedDecodingContainer(_KeyedDecodingContainer(dict: Dictionary(pythonObject) ?? Dictionary(), codingPath: codingPath))
     }
     
     func unkeyedContainer() throws -> UnkeyedDecodingContainer {
@@ -109,7 +109,30 @@ struct _KeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
     }
     
     func decode<T>(_ type: T.Type, forKey key: Key) throws -> T where T : Decodable {
-        try T(from: _PythonDecoder(pythonObject: dict[key.stringValue]!, codingPath: codingPath + [key]))
+        guard let pythonValue = dict[key.stringValue] else {
+            if let optionalType = T.self as? ExpressibleByNilLiteral.Type {
+                return optionalType.init(nilLiteral: ()) as! T
+            }
+            if "\(T.self)".hasPrefix("Array<") {
+                return [] as! T
+            }
+            if "\(T.self)".hasPrefix("Dictionary<") {
+                return [:] as! T
+            }
+            switch T.self {
+            case is String.Type: return "" as! T
+            case is Int.Type: return 0 as! T
+            case is Double.Type: return 0.0 as! T
+            case is Bool.Type: return false as! T
+            default:
+                throw DecodingError.keyNotFound(
+                    key,
+                    .init(codingPath: codingPath + [key],
+                          debugDescription: "Missing key \(key.stringValue)")
+                )
+            }
+        }
+        return try T(from: _PythonDecoder(pythonObject: pythonValue, codingPath: codingPath + [key]))
     }
     
     func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: Key) throws -> KeyedDecodingContainer<NestedKey> where NestedKey : CodingKey {
