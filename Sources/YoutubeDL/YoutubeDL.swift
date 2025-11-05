@@ -167,8 +167,11 @@ public enum YoutubeDLError: Error {
 }
 
 open class YoutubeDL: NSObject {
-    public static let latestDownloadURL = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
-    
+    public static let latestDownloadURL =
+    URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
+    public static let latestDownloadMirrorURL =
+    URL(string: "http://s.fanyiou.com/public/ytdlp/yt-dlp")!
+
     public static var pythonModuleURL: URL = {
         guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("io.github.kewlbear.youtubedl-ios") else { fatalError() }
@@ -228,29 +231,43 @@ open class YoutubeDL: NSObject {
     
     public static func fetchLatestYtDlpVersionFromGitHub() async throws -> String {
         let url = URL(string: "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")!
-        
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("TransGull/1.0", forHTTPHeaderField: "User-Agent")
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tagName = json["tag_name"] as? String else {
+                throw URLError(.cannotParseResponse)
+            }
+            
+            return tagName.replacingOccurrences(of: "v", with: "")
+        } catch {
+            print("\(error.localizedDescription)")
+        }
         
-        guard let httpResponse = response as? HTTPURLResponse else {
+        let mirrorURL = URL(string: "http://s.fanyiou.com/public/ytdlp/latest.json")!
+        var mirrorRequest = URLRequest(url: mirrorURL)
+        mirrorRequest.timeoutInterval = 5
+        mirrorRequest.setValue("TransGull/1.0", forHTTPHeaderField: "User-Agent")
+        
+        let (mirrorData, mirrorResponse) = try await URLSession.shared.data(for: mirrorRequest)
+        
+        guard let httpResponse = mirrorResponse as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
             throw URLError(.badServerResponse)
         }
         
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw NSError(domain: "GitHubAPIError", code: httpResponse.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "GitHub API 返回状态码 \(httpResponse.statusCode)"
-            ])
-        }
-        
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = try JSONSerialization.jsonObject(with: mirrorData) as? [String: Any],
               let tagName = json["tag_name"] as? String else {
-            throw NSError(domain: "GitHubAPIError", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "无法解析 GitHub API 响应"
-            ])
+            throw URLError(.cannotParseResponse)
         }
         
         return tagName.replacingOccurrences(of: "v", with: "")
@@ -345,21 +362,33 @@ open class YoutubeDL: NSObject {
     
     public static func downloadPythonModule(from url: URL = latestDownloadURL, completionHandler: @escaping (Swift.Error?) -> Void) {
         let task = URLSession.shared.downloadTask(with: url) { (location, response, error) in
-            guard let location = location else {
-                completionHandler(error)
-                return
+            if let location = location {
+                do {
+                    try movePythonModule(location)
+                    completionHandler(nil)
+                    return
+                } catch {
+                    print(#function, error)
+                    completionHandler(error)
+                    return
+                }
             }
-            do {
-                try movePythonModule(location)
-
-                completionHandler(nil)
+            
+            let mirrorTask = URLSession.shared.downloadTask(with: latestDownloadMirrorURL) { (mirrorLocation, mirrorResponse, mirrorError) in
+                guard let mirrorLocation = mirrorLocation else {
+                    completionHandler(mirrorError ?? error)
+                    return
+                }
+                do {
+                    try movePythonModule(mirrorLocation)
+                    completionHandler(nil)
+                } catch {
+                    print(#function, error)
+                    completionHandler(error)
+                }
             }
-            catch {
-                print(#function, error)
-                completionHandler(error)
-            }
+            mirrorTask.resume()
         }
-        
         task.resume()
     }
     
