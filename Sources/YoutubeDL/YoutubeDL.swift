@@ -170,7 +170,7 @@ open class YoutubeDL: NSObject {
     public static let latestDownloadURL =
     URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
     public static let latestDownloadMirrorURL =
-    URL(string: "http://s.fanyiou.com/public/ytdlp/yt-dlp")!
+    URL(string: "https://s.fanyiou.com/public/ytdlp/yt-dlp")!
 
     public static var pythonModuleURL: URL = {
         guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -201,19 +201,26 @@ open class YoutubeDL: NSObject {
             PythonSupport.initialize()
         }
         
+        let moduleExists = FileManager.default.fileExists(
+            atPath: Self.pythonModuleURL.path
+        )
+
         do {
-            let latestVersion = try await Self.fetchLatestYtDlpVersionFromGitHub()
+            let latestVersion = try await Self.fetchLatestVersion()
             let localVersion = self.getLocalVersion()
-            if localVersion == nil || latestVersion != localVersion {
+
+            if !moduleExists || localVersion == nil || latestVersion != localVersion {
                 try await Self.downloadPythonModule()
                 self.setLocalVersion(latestVersion)
             }
         } catch {
-            if !FileManager.default.fileExists(atPath: Self.pythonModuleURL.path) {
+            if !moduleExists {
                 guard downloadPythonModule else {
                     throw YoutubeDLError.noPythonModule
                 }
                 try await Self.downloadPythonModule()
+            } else {
+                throw error
             }
         }
         
@@ -229,7 +236,7 @@ open class YoutubeDL: NSObject {
         return pythonModule
     }
     
-    public static func fetchLatestYtDlpVersionFromGitHub() async throws -> String {
+    public static func fetchLatestVersion() async throws -> String {
         let url = URL(string: "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")!
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
