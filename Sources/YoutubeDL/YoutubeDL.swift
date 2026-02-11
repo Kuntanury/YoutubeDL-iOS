@@ -158,7 +158,9 @@ public struct Ext: Codable {
 public let defaultOptions: PythonObject = [
     "format": "bestvideo,bestaudio[ext=m4a]/best",
     "nocheckcertificate": true,
-    "verbose": false,
+    "verbose": true,
+    // Allow yt-dlp to fetch EJS scripts if needed (desktop/other platforms)
+    "remote_components": ["ejs:github"],
 ]
 
 public enum YoutubeDLError: Error {
@@ -172,6 +174,9 @@ open class YoutubeDL: NSObject {
     public static let latestDownloadMirrorURL =
     URL(string: "https://s.fanyiou.com/public/ytdlp/yt-dlp")!
 
+    public static let appleWebKitJSIPluginDownloadURL =
+    URL(string: "https://github.com/grqz/yt-dlp-apple-webkit-jsi/releases/latest/download/yt-dlp-apple-webkit-jsi.zip")!
+
     public static var pythonModuleURL: URL = {
         guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("io.github.kewlbear.youtubedl-ios") else { fatalError() }
@@ -184,7 +189,43 @@ open class YoutubeDL: NSObject {
         return directory.appendingPathComponent("yt_dlp")
     }()
 
+    public static var pluginDirectoryURL: URL = {
+        guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("io.github.kewlbear.youtubedl-ios") else { fatalError() }
+        let pluginsDir = directory.appendingPathComponent("yt-dlp/plugins", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: pluginsDir, withIntermediateDirectories: true, attributes: nil)
+        } catch {
+            fatalError(error.localizedDescription)
+        }
+        return pluginsDir
+    }()
+    
+    public static var appleWebKitJSIPluginZipURL: URL {
+        pluginDirectoryURL.appendingPathComponent("yt-dlp-apple-webkit-jsi.zip")
+    }
+
+    public static var appleWebKitJSIPluginExtractedURL: URL {
+        pluginDirectoryURL.appendingPathComponent("yt-dlp-apple-webkit-jsi", isDirectory: true)
+    }
+
     public var version: String?
+    
+    private var cookieFileURL: URL?
+
+    public func setCookieFile(_ url: URL) {
+        self.cookieFileURL = url
+        UserDefaults.standard.set(url.path, forKey: "yt_dlp_cookiefile_path")
+        self.pythonObject = nil
+        self.options = nil
+    }
+
+    private func loadCookieFileIfNeeded() {
+        if cookieFileURL == nil,
+           let path = UserDefaults.standard.string(forKey: "yt_dlp_cookiefile_path") {
+            cookieFileURL = URL(fileURLWithPath: path)
+        }
+    }
 
     internal var pythonObject: PythonObject?
 
@@ -223,15 +264,45 @@ open class YoutubeDL: NSObject {
                 throw error
             }
         }
+        await ensureAppleWebKitJSIPluginInstalled()
+        await ensureAppleWebKitJSIPluginExtractedAndPatched()
+        let extractedPluginsDir = Self.appleWebKitJSIPluginExtractedURL.appendingPathComponent("yt_dlp_plugins", isDirectory: true)
+        print("[yt-dlp] extracted plugin root:", Self.appleWebKitJSIPluginExtractedURL.path,
+              "yt_dlp_plugins exists:", FileManager.default.fileExists(atPath: extractedPluginsDir.path))
         
         let sys = try Python.attemptImport("sys")
-        if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
+        let currentPath: [String] = Array(sys.path) ?? []
+        if !currentPath.contains(Self.pythonModuleURL.path) {
             injectFakePopen(handler: popenHandler)
             
             sys.path.insert(1, Self.pythonModuleURL.path)
+            
         }
         
+        
+        
         let pythonModule = try Python.attemptImport("yt_dlp")
+
+        // Patch apple-webkit-jsi: avoid crashing in set_logger due to generator priming issues
+        // (Some iOS/Python environments hit "can't send non-None value to a just-started generator" during set_logger)
+        runSimpleString("""
+try:
+    import inspect
+    import yt_dlp_plugins.webkit_jsi.lib.easy as _wk_easy
+
+    def _no_op_set_logger(self, new_logger=None):
+        return None
+
+    for _name, _obj in vars(_wk_easy).items():
+        if inspect.isclass(_obj) and hasattr(_obj, 'set_logger'):
+            try:
+                setattr(_obj, 'set_logger', _no_op_set_logger)
+            except Exception:
+                pass
+except Exception:
+    pass
+""")
+
         version = String(pythonModule.version.__version__)
         return pythonModule
     }
@@ -292,28 +363,46 @@ open class YoutubeDL: NSObject {
         runSimpleString("""
             import errno
             import os
-            
+            import io
+
             class Pop:
                 def __init__(self, *args, **kwargs):
                     print('Popen.__init__:', self, args)#, kwargs)
                     self.__args = args
-            
+                    self.returncode = 0
+                    # Provide file-like stdout/stderr so callers like ctypes.util.find_library can read
+                    self.stdout = io.BytesIO(b'')
+                    self.stderr = io.BytesIO(b'')
+
                 def communicate(self, *args, **kwargs):
                     print('Popen.communicate:', self, args, kwargs)
-                    return self.handler(self, self.__args)
+                    out, err = self.handler(self, self.__args)
+                    if out is None:
+                        out = ''
+                    if err is None:
+                        err = ''
+                    if isinstance(out, str):
+                        out = out.encode('utf-8')
+                    if isinstance(err, str):
+                        err = err.encode('utf-8')
+                    # Keep stdout/stderr readable after communicate
+                    self.stdout = io.BytesIO(out)
+                    self.stderr = io.BytesIO(err)
+                    return out, err
 
                 def kill(self):
                     print('Popen.kill:', self)
 
                 def wait(self, **kwargs):
                     print('Popen.wait:', self, kwargs)
+                    return self.returncode
 
                 def __enter__(self):
                     return self
-                
+
                 def __exit__(self, type, value, traceback):
                     pass
-            
+
             import subprocess
             subprocess.Popen = Pop
             """)
@@ -325,28 +414,95 @@ open class YoutubeDL: NSObject {
     lazy var popenHandler = PythonFunction { args in
         print(#function, args)
         let popen = args[0]
-        let result = Array<String?>(repeating: nil, count: 2)
-        
+
         if let args: [String] = Array(args[1][0]) {
             popen.returncode = PythonObject(0)
-            
-            func read(pipe: Pipe) -> String? {
-                let data = pipe.fileHandleForReading.availableData
-                let output = String(data: data, encoding: .utf8)
-                return output
+
+            let builtins = Python.import("builtins")
+            let emptyBytes = builtins.bytes(PythonObject(""), PythonObject("utf-8"))
+
+            // ctypes.util.find_library may call /sbin/ldconfig -p and read from p.stdout
+            if args.count >= 2, args[0] == "/sbin/ldconfig", args[1] == "-p" {
+                return Python.tuple([emptyBytes, emptyBytes])
             }
-            
-            return Python.tuple(result)
+
+            // ld checks like: ld -t -o /dev/null -ldl
+            if args.first == "ld" {
+                return Python.tuple([emptyBytes, emptyBytes])
+            }
+
+            return Python.tuple([emptyBytes, emptyBytes])
         }
-        return Python.tuple(result)
+        let builtins = Python.import("builtins")
+        let emptyBytes = builtins.bytes(PythonObject(""), PythonObject("utf-8"))
+        return Python.tuple([emptyBytes, emptyBytes])
     }
     
     func makePythonObject(_ options: PythonObject? = nil, initializePython: Bool = true) async throws -> PythonObject {
+//        let pythonModule = try await loadPythonModule()
+//        let options = options ?? defaultOptions
+//        pythonObject = pythonModule.YoutubeDL(options)
+//        self.options = options
+//        return pythonObject!
         let pythonModule = try await loadPythonModule()
-        let options = options ?? defaultOptions
-        pythonObject = pythonModule.YoutubeDL(options)
-        self.options = options
+        loadCookieFileIfNeeded()
+
+        var merged: PythonObject = defaultOptions
+        if let opt = options {
+            merged = opt
+        }
+        if let cookieFileURL {
+            merged["cookiefile"] = PythonObject(cookieFileURL.path)
+        }
+
+        // Prefer extracted (patched) plugin folder.
+        // NOTE: yt-dlp expects each plugin_dir to be a *parent* directory that contains a `yt_dlp_plugins` package.
+        let extractedRoot = Self.appleWebKitJSIPluginExtractedURL
+        let extractedPluginsPkg = extractedRoot.appendingPathComponent("yt_dlp_plugins", isDirectory: true)
+
+        let chosenPluginDir: String
+        if FileManager.default.fileExists(atPath: extractedPluginsPkg.path) {
+            chosenPluginDir = extractedRoot.path
+        } else {
+            chosenPluginDir = Self.pluginDirectoryURL.path
+        }
+
+        // Make sure we pass a real Python list, not a Swift array (yt-dlp is strict about plugin_dirs)
+        merged["plugin_dirs"] = Python.list([PythonObject(chosenPluginDir), PythonObject("default")])
+
+        // Do NOT set any js_runtimes on iOS. Ensure the key is removed entirely.
+        do {
+            let hasKey = Bool(PythonObject(merged.__contains__("js_runtimes"))) ?? false
+            if hasKey {
+                _ = merged.pop("js_runtimes")
+            }
+        }
+
+        pythonObject = pythonModule.YoutubeDL(merged)
+        print("[yt-dlp] plugin_dirs:", merged["plugin_dirs"], "has js_runtimes:", Bool(PythonObject(merged.__contains__("js_runtimes"))) ?? false)
+        self.options = merged
         return pythonObject!
+    }
+
+    private func ensureAppleWebKitJSIPluginInstalled() async {
+        let pluginZip = Self.appleWebKitJSIPluginZipURL
+        if FileManager.default.fileExists(atPath: pluginZip.path) {
+            return
+        }
+        do {
+            if #available(iOS 15.0, *) {
+                let (location, _) = try await URLSession.shared.download(from: Self.appleWebKitJSIPluginDownloadURL)
+                // Ensure parent exists
+                try? FileManager.default.createDirectory(at: Self.pluginDirectoryURL, withIntermediateDirectories: true)
+                removeItem(at: pluginZip)
+                try FileManager.default.moveItem(at: location, to: pluginZip)
+                print("[yt-dlp] Installed plugin: yt-dlp-apple-webkit-jsi ->", pluginZip.path)
+            } else {
+                // Fallback on earlier versions
+            }
+        } catch {
+            print("[yt-dlp] Failed to download yt-dlp-apple-webkit-jsi:", error.localizedDescription)
+        }
     }
     
     open func getInfo(url: URL) async throws -> (Info) {
@@ -356,9 +512,17 @@ open class YoutubeDL: NSObject {
         } else {
             pythonObject = try await makePythonObject()
         }
-        let decoder = PythonDecoder()
-        let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: ["": url.absoluteString, "download": false, "process": true])
-        return (try decoder.decode(Info.self, from: info))
+
+        // apple-webkit-jsi constructs a WKWebView and must run on the main thread
+        return try await MainActor.run {
+            let decoder = PythonDecoder()
+            let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: [
+                "": url.absoluteString,
+                "download": false,
+                "process": true
+            ])
+            return try decoder.decode(Info.self, from: info)
+        }
     }
     
     fileprivate static func movePythonModule(_ location: URL) throws {
@@ -415,6 +579,114 @@ open class YoutubeDL: NSObject {
                 }
             }
         }
+    }
+    
+    private func ensureAppleWebKitJSIPluginExtractedAndPatched() async {
+        let zipURL = Self.appleWebKitJSIPluginZipURL
+        let extractURL = Self.appleWebKitJSIPluginExtractedURL
+
+        // Extract once (if needed). Even if the zip is removed later, we may still need to patch.
+        let marker = extractURL.appendingPathComponent(".extracted")
+        let extractedAlready = FileManager.default.fileExists(atPath: marker.path)
+
+        if !extractedAlready {
+            // If not extracted yet, we need the zip to proceed
+            guard FileManager.default.fileExists(atPath: zipURL.path) else {
+                return
+            }
+            do {
+                try? FileManager.default.removeItem(at: extractURL)
+                try FileManager.default.createDirectory(at: extractURL, withIntermediateDirectories: true)
+
+                // Use Python's zipfile to extract (no external libs)
+                let zipPath = zipURL.path.replacingOccurrences(of: "\\", with: "\\\\")
+                let outPath = extractURL.path.replacingOccurrences(of: "\\", with: "\\\\")
+                runSimpleString("""
+import zipfile, os
+_zip = r'''\(zipPath)'''
+_out = r'''\(outPath)'''
+os.makedirs(_out, exist_ok=True)
+with zipfile.ZipFile(_zip, 'r') as z:
+    z.extractall(_out)
+""")
+
+                try Data("ok".utf8).write(to: marker, options: .atomic)
+                // Remove the zip after extraction so yt-dlp loads the extracted (patched) plugin instead of the zip
+                removeItem(at: zipURL)
+                print("[yt-dlp] Extracted plugin to:", extractURL.path)
+            } catch {
+                print("[yt-dlp] Failed to extract yt-dlp-apple-webkit-jsi:", error.localizedDescription)
+                return
+            }
+        }
+
+        // Patch api.py to guard generator priming issues on some iOS/Python runtimes
+        let apiPy = extractURL
+            .appendingPathComponent("yt_dlp_plugins", isDirectory: true)
+            .appendingPathComponent("webkit_jsi", isDirectory: true)
+            .appendingPathComponent("lib", isDirectory: true)
+            .appendingPathComponent("api.py")
+
+        guard FileManager.default.fileExists(atPath: apiPy.path) else { return }
+
+        let apiPath = apiPy.path.replacingOccurrences(of: "\\", with: "\\\\")
+        runSimpleString("""
+try:
+    _p = r'''\(apiPath)'''
+    with open(_p, 'r', encoding='utf-8') as f:
+        s = f.read()
+
+    if '_safe_gen_send' not in s and 'gen_run.send(args)' in s:
+        helper_lines = [
+            "",
+            "# --- TransGull patch: guard generator priming (iOS/PythonKit)",
+            "",
+            "def _safe_gen_send(_gen, _args):",
+            "    try:",
+            "        return _gen.send(_args)",
+            "    except TypeError as _e:",
+            "        if 'just-started generator' in str(_e):",
+            "            try:",
+            "                _gen.send(None)",
+            "            except Exception:",
+            "                pass",
+            "            return _gen.send(_args)",
+            "        raise",
+            "# --- end patch",
+            ""
+        ]
+        helper = "\\n".join(helper_lines)
+
+        lines = s.splitlines(True)
+        insert_at = 0
+        for i, line in enumerate(lines):
+            if line.strip():
+                insert_at = i + 1
+                break
+        lines.insert(insert_at, helper)
+        s2 = ''.join(lines)
+        s2 = s2.replace('yield lambda *args: gen_run.send(args)', 'yield lambda *args: _safe_gen_send(gen_run, args)')
+
+        with open(_p, 'w', encoding='utf-8') as f:
+            f.write(s2)
+        print('PATCHED api.py:', _p)
+    else:
+        print('SKIP patch api.py (already patched or pattern missing):', _p)
+except Exception as _e:
+    print('FAILED patch api.py:', _e)
+""")
+        // Verify patch outcome (log whether the old callsite still exists)
+        runSimpleString("""
+try:
+    _p = r'''\(apiPath)'''
+    with open(_p, 'r', encoding='utf-8') as f:
+        _s = f.read()
+    print('VERIFY api.py contains gen_run.send(args):', 'gen_run.send(args)' in _s)
+    print('VERIFY api.py contains _safe_gen_send:', '_safe_gen_send' in _s)
+except Exception as _e:
+    print('FAILED verify api.py:', _e)
+""")
+        print("[yt-dlp] Patched plugin api.py at:", apiPy.path)
     }
 }
 
