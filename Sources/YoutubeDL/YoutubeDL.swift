@@ -361,6 +361,38 @@ open class YoutubeDL: NSObject {
         return (try decoder.decode(Info.self, from: info))
     }
     
+    // use for mock data
+    open func getLocalInfo(from url: URL) throws -> Info {
+        let data = try Data(contentsOf: url)
+        
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .useDefaultKeys
+        decoder.dateDecodingStrategy = .secondsSince1970
+        
+        return try decoder.decode(Info.self, from: data)
+    }
+    
+    // use for validating PythonDecoder with local JSON
+    open func getLocalInfoViaPythonDecoder(from url: URL) throws -> Info {
+        if Py_IsInitialized() == 0 {
+            PythonSupport.initialize()
+        }
+        
+        let data = try Data(contentsOf: url)
+        
+        guard let jsonString = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "YoutubeDL", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to decode JSON file as UTF-8 string"
+            ])
+        }
+        
+        let pyJSON = Python.import("json")
+        let pyDict = pyJSON.loads(jsonString)
+        
+        let decoder = PythonDecoder()
+        return try decoder.decode(Info.self, from: pyDict)
+    }
+    
     fileprivate static func movePythonModule(_ location: URL) throws {
         removeItem(at: pythonModuleURL)
         
