@@ -196,7 +196,7 @@ open class YoutubeDL: NSObject {
         super.init()
     }
     
-    func loadPythonModule(downloadPythonModule: Bool = true) async throws -> PythonObject {
+    func loadPythonModule(allowDownload: Bool = true) async throws -> PythonObject {
         if Py_IsInitialized() == 0 {
             PythonSupport.initialize()
         }
@@ -205,25 +205,50 @@ open class YoutubeDL: NSObject {
             atPath: Self.pythonModuleURL.path
         )
 
-        do {
-            let latestVersion = try await Self.fetchLatestVersion()
-            let localVersion = self.getLocalVersion()
+        guard moduleExists || allowDownload else {
+            throw YoutubeDLError.noPythonModule
+        }
 
-            if !moduleExists || localVersion == nil || latestVersion != localVersion {
-                try await Self.downloadPythonModule()
-                self.setLocalVersion(latestVersion)
-            }
+        let latestVersion: String
+        do {
+            latestVersion = try await Self.fetchLatestVersion()
         } catch {
             if !moduleExists {
-                guard downloadPythonModule else {
+                guard allowDownload else {
                     throw YoutubeDLError.noPythonModule
                 }
                 try await Self.downloadPythonModule()
             } else {
-                throw error
+                print("Failed to check latest yt_dlp version; using local module:", error.localizedDescription)
+            }
+            
+            return try importPythonModule()
+        }
+
+        let localVersion = self.getLocalVersion()
+        if !moduleExists || localVersion == nil || latestVersion != localVersion {
+            if !allowDownload {
+                guard moduleExists else {
+                    throw YoutubeDLError.noPythonModule
+                }
+                print("Skipping yt_dlp update; using local module")
+            } else {
+                do {
+                    try await Self.downloadPythonModule()
+                    self.setLocalVersion(latestVersion)
+                } catch {
+                    guard moduleExists else {
+                        throw error
+                    }
+                    print("Failed to update yt_dlp; using local module:", error.localizedDescription)
+                }
             }
         }
         
+        return try importPythonModule()
+    }
+    
+    private func importPythonModule() throws -> PythonObject {
         let sys = try Python.attemptImport("sys")
         if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
             injectFakePopen(handler: popenHandler)
@@ -361,60 +386,62 @@ open class YoutubeDL: NSObject {
         return (try decoder.decode(Info.self, from: info))
     }
     
-    fileprivate static func movePythonModule(_ location: URL) throws {
-        removeItem(at: pythonModuleURL)
+    fileprivate static func validateDownloadResponse(_ response: URLResponse) throws {
+        guard let httpResponse = response as? HTTPURLResponse else { return }
         
-        try FileManager.default.moveItem(at: location, to: pythonModuleURL)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+    }
+    
+    fileprivate static func movePythonModule(_ location: URL) throws {
+        let directory = pythonModuleURL.deletingLastPathComponent()
+        let backupURL = directory.appendingPathComponent("\(pythonModuleURL.lastPathComponent).backup")
+        removeItem(at: backupURL)
+        
+        if FileManager.default.fileExists(atPath: pythonModuleURL.path) {
+            try FileManager.default.moveItem(at: pythonModuleURL, to: backupURL)
+        }
+        
+        do {
+            try FileManager.default.moveItem(at: location, to: pythonModuleURL)
+            removeItem(at: backupURL)
+        } catch {
+            if FileManager.default.fileExists(atPath: backupURL.path) {
+                try? FileManager.default.moveItem(at: backupURL, to: pythonModuleURL)
+            }
+            throw error
+        }
     }
     
     public static func downloadPythonModule(from url: URL = latestDownloadURL, completionHandler: @escaping (Swift.Error?) -> Void) {
-        let task = URLSession.shared.downloadTask(with: url) { (location, response, error) in
-            if let location = location {
-                do {
-                    try movePythonModule(location)
-                    completionHandler(nil)
-                    return
-                } catch {
-                    print(#function, error)
-                    completionHandler(error)
-                    return
-                }
+        Task {
+            do {
+                try await downloadPythonModule(from: url)
+                completionHandler(nil)
+            } catch {
+                completionHandler(error)
             }
-            
-            let mirrorTask = URLSession.shared.downloadTask(with: latestDownloadMirrorURL) { (mirrorLocation, mirrorResponse, mirrorError) in
-                guard let mirrorLocation = mirrorLocation else {
-                    completionHandler(mirrorError ?? error)
-                    return
-                }
-                do {
-                    try movePythonModule(mirrorLocation)
-                    completionHandler(nil)
-                } catch {
-                    print(#function, error)
-                    completionHandler(error)
-                }
-            }
-            mirrorTask.resume()
         }
-        task.resume()
     }
     
     public static func downloadPythonModule(from url: URL = latestDownloadURL) async throws {
         let stopWatch = StopWatch(); defer { stopWatch.report() }
-        if #available(iOS 15.0, *) {
-            let (location, _) = try await URLSession.shared.download(from: url)
-            try movePythonModule(location)
-        } else {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Swift.Error>) in
-                downloadPythonModule(from: url) { error in
-                    if let error = error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
-                }
+        
+        do {
+            try await downloadPythonModuleWithoutFallback(from: url)
+        } catch {
+            guard url != latestDownloadMirrorURL else {
+                throw error
             }
+            try await downloadPythonModuleWithoutFallback(from: latestDownloadMirrorURL)
         }
+    }
+    
+    private static func downloadPythonModuleWithoutFallback(from url: URL) async throws {
+        let (location, response) = try await URLSession.shared.download(from: url)
+        try validateDownloadResponse(response)
+        try movePythonModule(location)
     }
 }
 
