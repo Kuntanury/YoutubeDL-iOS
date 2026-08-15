@@ -164,9 +164,15 @@ public let defaultOptions: PythonObject = [
 public enum YoutubeDLError: Error {
     case noPythonModule
     case canceled
+    case missingPOToken
 }
 
 open class YoutubeDL: NSObject {
+    private enum ExtractionMode: Equatable {
+        case defaultClient
+        case mweb(poToken: String)
+    }
+
     public static let latestDownloadURL =
     URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
     public static let latestDownloadMirrorURL =
@@ -189,6 +195,8 @@ open class YoutubeDL: NSObject {
     internal var pythonObject: PythonObject?
 
     internal var options: PythonObject?
+
+    private var extractionMode: ExtractionMode?
     
     private let ytDlpVersionKey = "yt_dlp_version"
     
@@ -250,6 +258,10 @@ open class YoutubeDL: NSObject {
     
     private func importPythonModule() throws -> PythonObject {
         let sys = try Python.attemptImport("sys")
+        if let pluginRoot = Bundle.module.resourceURL?.path,
+           !(Array(sys.path) ?? []).contains(pluginRoot) {
+            sys.path.insert(1, pluginRoot)
+        }
         if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
             injectFakePopen(handler: popenHandler)
             
@@ -371,19 +383,57 @@ open class YoutubeDL: NSObject {
         let options = options ?? defaultOptions
         pythonObject = pythonModule.YoutubeDL(options)
         self.options = options
+        extractionMode = nil
         return pythonObject!
+    }
+
+    private func makeMWebPythonObject(poToken: String) async throws -> PythonObject {
+        let playerClients: PythonObject = ["mweb".pythonObject]
+        let poTokens: PythonObject = ["mweb.gvs+\(poToken)".pythonObject]
+        let youtubeExtractorArgs: PythonObject = [
+            "player_client": playerClients,
+            "po_token": poTokens,
+        ]
+        let extractorArgs: PythonObject = [
+            "youtube": youtubeExtractorArgs,
+        ]
+        let options: PythonObject = [
+            "format": "bestvideo,bestaudio[ext=m4a]/best",
+            "nocheckcertificate": true,
+            "verbose": false,
+            "extractor_args": extractorArgs,
+        ]
+        let object = try await makePythonObject(options)
+        extractionMode = .mweb(poToken: poToken)
+        return object
     }
     
     open func getInfo(url: URL) async throws -> (Info) {
+        try await extractInfo(url: url, mode: .defaultClient)
+    }
+
+    open func getInfo(url: URL, mwebPOToken: String) async throws -> Info {
+        guard !mwebPOToken.isEmpty else { throw YoutubeDLError.missingPOToken }
+        return try await extractInfo(url: url, mode: .mweb(poToken: mwebPOToken))
+    }
+
+    private func extractInfo(url: URL, mode: ExtractionMode) async throws -> Info {
         let pythonObject: PythonObject
-        if let _pythonObject = self.pythonObject {
+        if let _pythonObject = self.pythonObject,
+           extractionMode == mode {
             pythonObject = _pythonObject
         } else {
-            pythonObject = try await makePythonObject()
+            switch mode {
+            case .defaultClient:
+                pythonObject = try await makePythonObject()
+                extractionMode = .defaultClient
+            case .mweb(let poToken):
+                pythonObject = try await makeMWebPythonObject(poToken: poToken)
+            }
         }
         let decoder = PythonDecoder()
         let info = try pythonObject.extract_info.throwing.dynamicallyCall(withKeywordArguments: ["": url.absoluteString, "download": false, "process": true])
-        return (try decoder.decode(Info.self, from: info))
+        return try decoder.decode(Info.self, from: info)
     }
     
     fileprivate static func validateDownloadResponse(_ response: URLResponse) throws {

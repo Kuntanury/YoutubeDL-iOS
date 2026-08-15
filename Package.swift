@@ -17,7 +17,10 @@ let package = Package(
     targets: [
         .target(
             name: "YoutubeDL",
-            dependencies: ["Python-iOS", "PythonKit"]),
+            dependencies: ["Python-iOS", "PythonKit"],
+            resources: [
+                .copy("Resources/yt_dlp_plugins"),
+            ]),
         .testTarget(
             name: "YoutubeDL_iOSTests",
             dependencies: ["YoutubeDL"]),
