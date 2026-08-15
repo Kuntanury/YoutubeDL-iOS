@@ -166,6 +166,10 @@ public enum YoutubeDLError: Error {
     case canceled
 }
 
+public enum YoutubeDLPlayerClient: String {
+    case webSafari = "web_safari"
+}
+
 open class YoutubeDL: NSObject {
     public static let latestDownloadURL =
     URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
@@ -189,6 +193,8 @@ open class YoutubeDL: NSObject {
     internal var pythonObject: PythonObject?
 
     internal var options: PythonObject?
+
+    private var configuredPlayerClient: YoutubeDLPlayerClient?
     
     private let ytDlpVersionKey = "yt_dlp_version"
     
@@ -371,13 +377,44 @@ open class YoutubeDL: NSObject {
         let options = options ?? defaultOptions
         pythonObject = pythonModule.YoutubeDL(options)
         self.options = options
+        configuredPlayerClient = nil
         return pythonObject!
     }
+
+    private func makePythonObject(playerClient: YoutubeDLPlayerClient) async throws -> PythonObject {
+        let playerClients: PythonObject = [playerClient.rawValue.pythonObject]
+        let youtubeExtractorArgs: PythonObject = [
+            "player_client": playerClients,
+        ]
+        let extractorArgs: PythonObject = [
+            "youtube": youtubeExtractorArgs,
+        ]
+        let options: PythonObject = [
+            "format": "bestvideo,bestaudio[ext=m4a]/best",
+            "nocheckcertificate": true,
+            "verbose": false,
+            "extractor_args": extractorArgs,
+        ]
+        let object = try await makePythonObject(options)
+        configuredPlayerClient = playerClient
+        return object
+    }
     
-    open func getInfo(url: URL) async throws -> (Info) {
+    open func getInfo(url: URL) async throws -> Info {
+        try await extractInfo(url: url, playerClient: nil)
+    }
+
+    open func getInfo(url: URL, playerClient: YoutubeDLPlayerClient) async throws -> Info {
+        try await extractInfo(url: url, playerClient: playerClient)
+    }
+
+    private func extractInfo(url: URL, playerClient: YoutubeDLPlayerClient?) async throws -> Info {
         let pythonObject: PythonObject
-        if let _pythonObject = self.pythonObject {
+        if let _pythonObject = self.pythonObject,
+           configuredPlayerClient == playerClient {
             pythonObject = _pythonObject
+        } else if let playerClient {
+            pythonObject = try await makePythonObject(playerClient: playerClient)
         } else {
             pythonObject = try await makePythonObject()
         }
