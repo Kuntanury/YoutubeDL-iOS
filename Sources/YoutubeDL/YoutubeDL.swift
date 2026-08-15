@@ -167,6 +167,7 @@ public enum YoutubeDLError: Error {
 }
 
 public enum YoutubeDLPlayerClient: String {
+    case mweb
     case webSafari = "web_safari"
 }
 
@@ -195,6 +196,7 @@ open class YoutubeDL: NSObject {
     internal var options: PythonObject?
 
     private var configuredPlayerClient: YoutubeDLPlayerClient?
+    private var configuredPOToken: String?
     
     private let ytDlpVersionKey = "yt_dlp_version"
     
@@ -256,6 +258,10 @@ open class YoutubeDL: NSObject {
     
     private func importPythonModule() throws -> PythonObject {
         let sys = try Python.attemptImport("sys")
+        if let pluginRoot = Bundle.module.resourceURL?.path,
+           !(Array(sys.path) ?? []).contains(pluginRoot) {
+            sys.path.insert(1, pluginRoot)
+        }
         if !(Array(sys.path) ?? []).contains(Self.pythonModuleURL.path) {
             injectFakePopen(handler: popenHandler)
             
@@ -378,14 +384,29 @@ open class YoutubeDL: NSObject {
         pythonObject = pythonModule.YoutubeDL(options)
         self.options = options
         configuredPlayerClient = nil
+        configuredPOToken = nil
         return pythonObject!
     }
 
-    private func makePythonObject(playerClient: YoutubeDLPlayerClient) async throws -> PythonObject {
+    private func makePythonObject(
+        playerClient: YoutubeDLPlayerClient,
+        poToken: String? = nil
+    ) async throws -> PythonObject {
         let playerClients: PythonObject = [playerClient.rawValue.pythonObject]
-        let youtubeExtractorArgs: PythonObject = [
-            "player_client": playerClients,
-        ]
+        let youtubeExtractorArgs: PythonObject
+        if let poToken, !poToken.isEmpty {
+            let poTokens: PythonObject = [
+                "\(playerClient.rawValue).gvs+\(poToken)".pythonObject,
+            ]
+            youtubeExtractorArgs = [
+                "player_client": playerClients,
+                "po_token": poTokens,
+            ]
+        } else {
+            youtubeExtractorArgs = [
+                "player_client": playerClients,
+            ]
+        }
         let extractorArgs: PythonObject = [
             "youtube": youtubeExtractorArgs,
         ]
@@ -397,24 +418,38 @@ open class YoutubeDL: NSObject {
         ]
         let object = try await makePythonObject(options)
         configuredPlayerClient = playerClient
+        configuredPOToken = poToken
         return object
     }
     
     open func getInfo(url: URL) async throws -> Info {
-        try await extractInfo(url: url, playerClient: nil)
+        try await extractInfo(url: url, playerClient: nil, poToken: nil)
     }
 
     open func getInfo(url: URL, playerClient: YoutubeDLPlayerClient) async throws -> Info {
-        try await extractInfo(url: url, playerClient: playerClient)
+        try await extractInfo(url: url, playerClient: playerClient, poToken: nil)
     }
 
-    private func extractInfo(url: URL, playerClient: YoutubeDLPlayerClient?) async throws -> Info {
+    open func getInfo(
+        url: URL,
+        playerClient: YoutubeDLPlayerClient,
+        poToken: String
+    ) async throws -> Info {
+        try await extractInfo(url: url, playerClient: playerClient, poToken: poToken)
+    }
+
+    private func extractInfo(
+        url: URL,
+        playerClient: YoutubeDLPlayerClient?,
+        poToken: String?
+    ) async throws -> Info {
         let pythonObject: PythonObject
         if let _pythonObject = self.pythonObject,
-           configuredPlayerClient == playerClient {
+           configuredPlayerClient == playerClient,
+           configuredPOToken == poToken {
             pythonObject = _pythonObject
         } else if let playerClient {
-            pythonObject = try await makePythonObject(playerClient: playerClient)
+            pythonObject = try await makePythonObject(playerClient: playerClient, poToken: poToken)
         } else {
             pythonObject = try await makePythonObject()
         }
