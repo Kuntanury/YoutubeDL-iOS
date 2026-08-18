@@ -14,6 +14,11 @@ API_SOURCE = (
     / 'api.py'
 )
 PYNEAPPLE_SOURCE = API_SOURCE.with_name('pyneapple_objc.py')
+PROVIDER_SOURCE = (
+    API_SOURCE.parents[2]
+    / 'extractor'
+    / 'ytjsc.py'
+)
 
 
 class WebKitJSISourceTests(unittest.TestCase):
@@ -57,6 +62,12 @@ class WebKitJSISourceTests(unittest.TestCase):
         self.assertIn('schedule_steps=False', source)
         self.assertIn('if schedule_steps:', source)
         self.assertIn('scheduled()', source)
+
+    def test_embedded_ios_prefers_the_native_javascript_runner(self):
+        source = PROVIDER_SOURCE.read_text(encoding='utf-8')
+
+        self.assertIn("getattr(builtins, '__youtubedl_ios_run_javascript', None)", source)
+        self.assertIn('result, err = native_runner(stdin)', source)
 
 
 if __name__ == '__main__':

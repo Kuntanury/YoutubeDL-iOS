@@ -258,6 +258,8 @@ open class YoutubeDL: NSObject {
     
     private func importPythonModule() throws -> PythonObject {
         let sys = try Python.attemptImport("sys")
+        let builtins = try Python.attemptImport("builtins")
+        builtins.__youtubedl_ios_run_javascript = nativeJavaScriptRunner.pythonObject
         if let pluginRoot = Bundle.module.resourceURL?.path,
            !(Array(sys.path) ?? []).contains(pluginRoot) {
             sys.path.insert(1, pluginRoot)
@@ -271,6 +273,14 @@ open class YoutubeDL: NSObject {
         let pythonModule = try Python.attemptImport("yt_dlp")
         version = String(pythonModule.version.__version__)
         return pythonModule
+    }
+
+    private lazy var nativeJavaScriptRunner = PythonFunction { arguments in
+        guard let script = arguments.first.flatMap(String.init) else {
+            throw NativeJavaScriptRunnerError.invalidResult
+        }
+        let output = try NativeJavaScriptRunner.run(script: script)
+        return Python.tuple([output.standardOutput, output.standardError])
     }
     
     public static func fetchLatestVersion() async throws -> String {

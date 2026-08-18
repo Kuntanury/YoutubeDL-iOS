@@ -1,3 +1,5 @@
+import builtins
+
 from typing import cast as py_typecast
 
 from yt_dlp.extractor.youtube.jsc.provider import (
@@ -30,6 +32,14 @@ class AppleWebKitJCP(AppleWebKitMixin['AppleWebKitJCP'], EJSBaseJCP):
 
     def _run_js_runtime(self, stdin: str, /) -> str:
         self.logger.trace(f'solving challenge, script length: {len(stdin)}')
+        native_runner = getattr(builtins, '__youtubedl_ios_run_javascript', None)
+        if native_runner is not None:
+            self.logger.trace('using native iOS JavaScript runner')
+            result, err = native_runner(stdin)
+            if err:
+                raise JsChallengeProviderError(f'Error running native iOS WebKit: {err}')
+            return result
+
         result = ''
         err = ''
 
