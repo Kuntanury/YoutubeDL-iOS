@@ -43,12 +43,15 @@ struct NativeJavaScriptOutput {
 
 enum NativeJavaScriptRunnerError: LocalizedError {
     case invalidResult
+    case mainThreadExecution
     case timedOut
 
     var errorDescription: String? {
         switch self {
         case .invalidResult:
             return "The native JavaScript runner returned an invalid result."
+        case .mainThreadExecution:
+            return "The native JavaScript runner must be called off the main thread."
         case .timedOut:
             return "The native JavaScript runner timed out."
         }
@@ -56,27 +59,49 @@ enum NativeJavaScriptRunnerError: LocalizedError {
 }
 
 enum NativeJavaScriptRunner {
-    private static let timeout: TimeInterval = 60
+    private static let timeout: TimeInterval = 30
 
     static func run(script: String) throws -> NativeJavaScriptOutput {
-        let execute = {
-            MainActor.assumeIsolated {
-                NativeJavaScriptExecution(script: script, timeout: timeout).run()
+        guard !Thread.isMainThread else {
+            throw NativeJavaScriptRunnerError.mainThreadExecution
+        }
+
+        let resultBox = NativeJavaScriptResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            NativeJavaScriptExecution(script: script, timeout: timeout).start { result in
+                resultBox.set(result)
+                semaphore.signal()
             }
         }
 
-        let result: Result<NativeJavaScriptOutput, Error>
-        if Thread.isMainThread {
-            result = execute()
-        } else {
-            result = DispatchQueue.main.sync(execute: execute)
+        guard semaphore.wait(timeout: .now() + timeout + 5) == .success,
+              let result = resultBox.get() else {
+            throw NativeJavaScriptRunnerError.timedOut
         }
         return try result.get()
     }
 }
 
+private final class NativeJavaScriptResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<NativeJavaScriptOutput, Error>?
+
+    func set(_ result: Result<NativeJavaScriptOutput, Error>) {
+        lock.lock()
+        self.result = result
+        lock.unlock()
+    }
+
+    func get() -> Result<NativeJavaScriptOutput, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return result
+    }
+}
+
 @MainActor
-private final class NativeJavaScriptExecution {
+private final class NativeJavaScriptExecution: NSObject, WKNavigationDelegate {
     private static let scriptPrefix = #"""
 const __transgullLogs = [];
 const communicate = async () => {
@@ -113,21 +138,40 @@ return await (async () => {
     private let script: String
     private let timeout: TimeInterval
     private var webView: WKWebView?
-    private var result: Result<NativeJavaScriptOutput, Error>?
+    private var completion: ((Result<NativeJavaScriptOutput, Error>) -> Void)?
+    private var keepAlive: NativeJavaScriptExecution?
+    private var didStartJavaScript = false
 
     init(script: String, timeout: TimeInterval) {
         self.script = script
         self.timeout = timeout
+        super.init()
     }
 
-    func run() -> Result<NativeJavaScriptOutput, Error> {
+    func start(completion: @escaping (Result<NativeJavaScriptOutput, Error>) -> Void) {
+        self.completion = completion
+        keepAlive = self
+
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         self.webView = webView
-        let functionBody = Self.scriptPrefix + script + Self.scriptSuffix
+        webView.navigationDelegate = self
+        webView.loadHTMLString(
+            "<!doctype html><html><head></head><body></body></html>",
+            baseURL: URL(string: "https://www.youtube.com")
+        )
 
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            self?.finish(.failure(NativeJavaScriptRunnerError.timedOut))
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !didStartJavaScript else { return }
+        didStartJavaScript = true
+        let functionBody = Self.scriptPrefix + script + Self.scriptSuffix
         webView.callAsyncJavaScript(
             functionBody,
             arguments: [:],
@@ -135,20 +179,34 @@ return await (async () => {
             in: .page
         ) { [weak self] result in
             guard let self else { return }
-            self.result = result.flatMap(Self.decode)
+            self.finish(result.flatMap(Self.decode))
         }
+    }
 
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while result == nil, Date() < deadline {
-            _ = RunLoop.current.run(
-                mode: .default,
-                before: Date(timeIntervalSinceNow: 0.01)
-            )
-        }
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        finish(.failure(error))
+    }
 
-        webView.stopLoading()
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        finish(.failure(error))
+    }
+
+    private func finish(_ result: Result<NativeJavaScriptOutput, Error>) {
+        guard let completion else { return }
+        self.completion = nil
+        webView?.navigationDelegate = nil
+        webView?.stopLoading()
         self.webView = nil
-        return result ?? .failure(NativeJavaScriptRunnerError.timedOut)
+        keepAlive = nil
+        completion(result)
     }
 
     private static func decode(_ value: Any) -> Result<NativeJavaScriptOutput, Error> {

@@ -19,6 +19,7 @@ PROVIDER_SOURCE = (
     / 'extractor'
     / 'ytjsc.py'
 )
+SWIFT_SOURCE = API_SOURCE.parents[4] / 'YoutubeDL.swift'
 
 
 class WebKitJSISourceTests(unittest.TestCase):
@@ -68,6 +69,13 @@ class WebKitJSISourceTests(unittest.TestCase):
 
         self.assertIn("getattr(builtins, '__youtubedl_ios_run_javascript', None)", source)
         self.assertIn('result, err = native_runner(stdin)', source)
+
+    def test_native_runner_does_not_block_the_main_run_loop(self):
+        source = SWIFT_SOURCE.read_text(encoding='utf-8')
+
+        self.assertIn('DispatchQueue.main.async {', source)
+        self.assertIn('webView.loadHTMLString(', source)
+        self.assertNotIn('RunLoop.current.run(', source)
 
 
 if __name__ == '__main__':
