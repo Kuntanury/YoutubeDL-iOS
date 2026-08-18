@@ -45,6 +45,19 @@ class WebKitJSISourceTests(unittest.TestCase):
         self.assertIn('isa=pyneapple.p_NSConcreteStackBlock', source)
         self.assertNotIn('p_NSConcreteMallocBlock', source)
 
+    def test_python_managed_blocks_use_complete_objective_c_abi_signatures(self):
+        source = API_SOURCE.read_text(encoding='utf-8')
+
+        self.assertIn("_pycb_real, None, POINTER(ObjCBlock), signature=b'v@?'", source)
+        self.assertIn("signature=b'v@?@@'", source)
+
+    def test_current_run_loop_coroutines_resume_without_foreign_run_loop_blocks(self):
+        source = API_SOURCE.read_text(encoding='utf-8')
+
+        self.assertIn('schedule_steps=False', source)
+        self.assertIn('if schedule_steps:', source)
+        self.assertIn('scheduled()', source)
+
 
 if __name__ == '__main__':
     unittest.main()

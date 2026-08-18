@@ -419,10 +419,15 @@ def get_gen(_logger: AbstractLogger) -> Generator[SENDMSG_CBTYPE, None, None]:
         def schedule_on(loop: c_void_p, pycb: Callable[[], None], *, var_keepalive: set, mode=kCFRunLoopDefaultMode):
             block: ObjCBlock
 
-            def _pycb_real():
+            def _pycb_real(_block: POINTER(ObjCBlock)):
                 pycb()
                 var_keepalive.remove(block)
-            block = pa.make_block(_pycb_real)
+            # A block's invoke function always receives the block literal as
+            # its hidden first argument, including a nominal void (^)(void).
+            # Supplying the complete ABI signature is required when the block
+            # is copied and invoked by CoreFoundation on iOS.
+            block = pa.make_block(
+                _pycb_real, None, POINTER(ObjCBlock), signature=b'v@?')
             var_keepalive.add(block)
             CFRunLoopPerformBlock(loop, mode, byref(block))
             CFRunLoopWakeUp(loop)
@@ -434,6 +439,7 @@ def get_gen(_logger: AbstractLogger) -> Generator[SENDMSG_CBTYPE, None, None]:
             loop: c_void_p,
             finish: Callable[[BaseException], None],
             default: U = None,
+            schedule_steps: bool = True,
         ) -> CFRL_CoroResult[Union[T, U]]:
             # Default is returned when the coroutine wrongly calls CFRunLoopStop(loop) or its equivalent
             res = CFRL_CoroResult[Union[T, U]](default)
@@ -478,17 +484,42 @@ def get_gen(_logger: AbstractLogger) -> Generator[SENDMSG_CBTYPE, None, None]:
                             pa.logger.trace(f'fut cb, calling _coro_step with {fut_res=}')
                             _coro_step(fut_res)
                         scheduled = _normal_cb
-                    schedule_on(loop, scheduled, var_keepalive=var_keepalive)
+                    if schedule_steps:
+                        schedule_on(loop, scheduled, var_keepalive=var_keepalive)
+                    else:
+                        # Futures used by the WebKit bridge are completed by
+                        # callbacks already executing on this run loop. Resume
+                        # directly instead of constructing another foreign
+                        # block for CFRunLoopPerformBlock.
+                        scheduled()
                 fut.add_done_callback(_on_fut_done)
                 pa.logger.trace(f'added done callback {_on_fut_done=} to fut {fut=}')
 
-            schedule_on(loop, _coro_step, var_keepalive=var_keepalive)
+            if schedule_steps:
+                schedule_on(loop, _coro_step, var_keepalive=var_keepalive)
+            else:
+                _coro_step()
             return res
 
         def runcoro_on_current(coro: Coroutine[Any, Any, T], *, default: U = None) -> Union[T, U]:
             var_keepalive = set()
-            res = _runcoro_on_loop_base(coro, var_keepalive=var_keepalive, loop=currloop, default=default, finish=lambda exc: CFRunLoopStop(currloop))
-            CFRunLoopRun()
+            finished = False
+
+            def finish(_exc: BaseException):
+                nonlocal finished
+                finished = True
+                CFRunLoopStop(currloop)
+
+            res = _runcoro_on_loop_base(
+                coro,
+                var_keepalive=var_keepalive,
+                loop=currloop,
+                default=default,
+                finish=finish,
+                schedule_steps=False,
+            )
+            if not finished:
+                CFRunLoopRun()
             pa.logger.trace(f'runcoro_on_current done: {res.rexc=}; {res.ret=}')
             if res.rexc is not None:
                 raise res.rexc from None
@@ -760,7 +791,14 @@ def get_gen(_logger: AbstractLogger) -> Generator[SENDMSG_CBTYPE, None, None]:
                             pa.logger.trace(f'JS done, resolving future; {id_result=}, {err=}')
                             fut_jsdone.set_result(True)
 
-                        chblock = pa.make_block(completion_handler, None, POINTER(ObjCBlock), c_void_p, c_void_p)
+                        chblock = pa.make_block(
+                            completion_handler,
+                            None,
+                            POINTER(ObjCBlock),
+                            c_void_p,
+                            c_void_p,
+                            signature=b'v@?@@',
+                        )
                         pa.send_message(
                             # Requires iOS 14.0+, maybe test its availability first
                             # TODO: respondsToSelector:@selector(callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:)
