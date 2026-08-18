@@ -174,7 +174,7 @@ class PyNeApple:
     __slots__ = (
         '_stack', 'dlsym_of_lib', '_fwks', '_init', 'logger',
         '_objc', '_system',
-        'p_NSConcreteMallocBlock',
+        'p_NSConcreteStackBlock',
         'class_addProtocol', 'class_addMethod', 'class_addIvar',
         'class_conformsToProtocol', 'class_getInstanceMethod', 'class_getName',
         'class_getInstanceVariable',
@@ -220,7 +220,12 @@ class PyNeApple:
 
             self._objc = self._stack.enter_context(self.dlsym_of_lib(b'/usr/lib/libobjc.A.dylib', os.RTLD_NOW))
             self._system = self._stack.enter_context(self.dlsym_of_lib(b'/usr/lib/libSystem.B.dylib', os.RTLD_LAZY))
-            self.p_NSConcreteMallocBlock = self._system(b'_NSConcreteMallocBlock').value
+            # Hand-built block literals live in Python-managed memory. Mark
+            # them as stack blocks so APIs that retain a block (including
+            # CFRunLoopPerformBlock) copy the literal before invoking it.
+            # Advertising this memory as an already-copied malloc block can
+            # leave CoreFoundation with a block whose invoke pointer is zero.
+            self.p_NSConcreteStackBlock = self._system(b'_NSConcreteStackBlock').value
 
             self.class_addProtocol = self.cfn_at(self._objc(b'class_addProtocol').value, c_byte, c_void_p, c_void_p)
             self.class_addMethod = self.cfn_at(self._objc(b'class_addMethod').value, c_byte, c_void_p, c_void_p, c_void_p, c_char_p)
@@ -465,7 +470,7 @@ class ObjCBlock(Structure):
             self._desc = ObjCBlockDescBase(reserved=0, size=sizeof(ObjCBlock))
         self._invoke = CFUNCTYPE(restype, *argtypes)(cb)
         super().__init__(
-            isa=pyneapple.p_NSConcreteMallocBlock,
+            isa=pyneapple.p_NSConcreteStackBlock,
             flags=f,
             reserved=0,
             invoke=cast(self._invoke, c_void_p),

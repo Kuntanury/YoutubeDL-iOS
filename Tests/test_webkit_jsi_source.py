@@ -13,6 +13,7 @@ API_SOURCE = (
     / 'lib'
     / 'api.py'
 )
+PYNEAPPLE_SOURCE = API_SOURCE.with_name('pyneapple_objc.py')
 
 
 class WebKitJSISourceTests(unittest.TestCase):
@@ -36,6 +37,13 @@ class WebKitJSISourceTests(unittest.TestCase):
 
         self.assertEqual(priming_calls_in_asserts, [])
         self.assertIn('initial_state = gen_run.send(None)', source)
+
+    def test_python_managed_blocks_are_copied_as_stack_blocks(self):
+        source = PYNEAPPLE_SOURCE.read_text(encoding='utf-8')
+
+        self.assertIn("self.p_NSConcreteStackBlock = self._system(b'_NSConcreteStackBlock').value", source)
+        self.assertIn('isa=pyneapple.p_NSConcreteStackBlock', source)
+        self.assertNotIn('p_NSConcreteMallocBlock', source)
 
 
 if __name__ == '__main__':

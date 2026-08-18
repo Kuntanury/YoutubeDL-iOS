@@ -15,6 +15,9 @@ Local compatibility patches:
 - Prime the WebKit task generator outside an `assert`. Python-iOS executes
   optimized bytecode, which removes assertions and previously skipped the
   required `send(None)` call.
+- Mark Python-managed Objective-C block literals as stack blocks. Retaining
+  APIs such as `CFRunLoopPerformBlock` must copy these literals; treating them
+  as malloc blocks can preserve an invalid literal and invoke a null callback.
 
 The plugin is bundled as a Swift Package resource so yt-dlp can discover the
 Apple WebKit JavaScript interpreter on iOS without a separate plugin install.
