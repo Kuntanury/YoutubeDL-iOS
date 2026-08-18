@@ -87,7 +87,12 @@ class DLSYM_FACT(Protocol):
 
 
 def get_dlsym_factory(*, logger: AbstractLogger, ldl_openmode: int = os.RTLD_NOW):
-    ldl = CDLL(find_library('dl'), mode=ldl_openmode)
+    # Python-iOS currently reports a non-Apple sys.platform value. Calling
+    # find_library('dl') therefore takes ctypes' Linux path and tries to run
+    # /sbin/ldconfig, but subprocesses are unavailable inside an iOS app.
+    # Darwin exports dlopen/dlsym/dlclose/dlerror from the current process, so
+    # resolve them there without spawning an external command.
+    ldl = CDLL(None, mode=ldl_openmode)
     # void *dlopen(const char *file, int mode);
     fn_dlopen = setup_signature(ldl.dlopen, c_void_p, c_char_p, c_int)
     # void *dlsym(void *restrict handle, const char *restrict name);
