@@ -12,6 +12,9 @@ Local compatibility patches:
   using `ctypes.util.find_library('dl')`. Python-iOS can otherwise enter the
   Linux lookup path and attempt to spawn `/sbin/ldconfig`, which is unavailable
   to iOS applications.
+- Prime the WebKit task generator outside an `assert`. Python-iOS executes
+  optimized bytecode, which removes assertions and previously skipped the
+  required `send(None)` call.
 
 The plugin is bundled as a Swift Package resource so yt-dlp can discover the
 Apple WebKit JavaScript interpreter on iOS without a separate plugin install.

@@ -788,6 +788,11 @@ def get_gen(_logger: AbstractLogger) -> Generator[SENDMSG_CBTYPE, None, None]:
                     last_res = runcoro_on_loop(py_typecast(CoroutineType, res_or_coro)) if fn_iscoro[fn_id] else res_or_coro
 
         gen_run = run()
-        assert gen_run.send(None) == 0
+        # Priming is required before the callback sends its first real task.
+        # Do not put this side effect in an assert: Python-iOS runs optimized
+        # bytecode, where assert statements are removed entirely.
+        initial_state = gen_run.send(None)
+        if initial_state != 0:
+            raise AssertionError(f'unexpected initial generator state: {initial_state!r}')
         yield lambda *args: gen_run.send(args)
         # pa.send_message(NSAutoreleasePool, b'showPools')
