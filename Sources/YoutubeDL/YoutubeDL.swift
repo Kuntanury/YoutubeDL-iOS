@@ -398,11 +398,6 @@ open class YoutubeDL: NSObject {
         case mweb(poToken: String)
     }
 
-    public static let latestDownloadURL =
-    URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp")!
-    public static let latestDownloadMirrorURL =
-    URL(string: "https://s.fanyiou.com/public/ytdlp/yt-dlp")!
-
     public static var pythonModuleURL: URL = {
         guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("io.github.kewlbear.youtubedl-ios") else { fatalError() }
@@ -422,21 +417,12 @@ open class YoutubeDL: NSObject {
     internal var options: PythonObject?
 
     private var extractionMode: ExtractionMode?
-    private let automaticallyUpdatesPythonModule: Bool
-    
-    private let ytDlpVersionKey = "yt_dlp_version"
     
     public override init() {
-        automaticallyUpdatesPythonModule = true
-        super.init()
-    }
-
-    public init(automaticallyUpdatesPythonModule: Bool) {
-        self.automaticallyUpdatesPythonModule = automaticallyUpdatesPythonModule
         super.init()
     }
     
-    func loadPythonModule(allowDownload: Bool = true) async throws -> PythonObject {
+    func loadPythonModule() async throws -> PythonObject {
         if Py_IsInitialized() == 0 {
             PythonSupport.initialize()
         }
@@ -445,53 +431,9 @@ open class YoutubeDL: NSObject {
             atPath: Self.pythonModuleURL.path
         )
 
-        if !automaticallyUpdatesPythonModule {
-            guard moduleExists else {
-                throw YoutubeDLError.noPythonModule
-            }
-            return try importPythonModule()
-        }
-
-        guard moduleExists || allowDownload else {
+        guard moduleExists else {
             throw YoutubeDLError.noPythonModule
         }
-
-        let latestVersion: String
-        do {
-            latestVersion = try await Self.fetchLatestVersion()
-        } catch {
-            if !moduleExists {
-                guard allowDownload else {
-                    throw YoutubeDLError.noPythonModule
-                }
-                try await Self.downloadPythonModule()
-            } else {
-                print("Failed to check latest yt_dlp version; using local module:", error.localizedDescription)
-            }
-            
-            return try importPythonModule()
-        }
-
-        let localVersion = self.getLocalVersion()
-        if !moduleExists || localVersion == nil || latestVersion != localVersion {
-            if !allowDownload {
-                guard moduleExists else {
-                    throw YoutubeDLError.noPythonModule
-                }
-                print("Skipping yt_dlp update; using local module")
-            } else {
-                do {
-                    try await Self.downloadPythonModule()
-                    self.setLocalVersion(latestVersion)
-                } catch {
-                    guard moduleExists else {
-                        throw error
-                    }
-                    print("Failed to update yt_dlp; using local module:", error.localizedDescription)
-                }
-            }
-        }
-        
         return try importPythonModule()
     }
     
@@ -520,58 +462,6 @@ open class YoutubeDL: NSObject {
         }
         let output = try NativeJavaScriptRunner.run(script: script)
         return Python.tuple([output.standardOutput, output.standardError])
-    }
-    
-    public static func fetchLatestVersion() async throws -> String {
-        let url = URL(string: "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")!
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 5
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("TransGull/1.0", forHTTPHeaderField: "User-Agent")
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
-            
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tagName = json["tag_name"] as? String else {
-                throw URLError(.cannotParseResponse)
-            }
-            
-            return tagName.replacingOccurrences(of: "v", with: "")
-        } catch {
-            print("\(error.localizedDescription)")
-        }
-        
-        let mirrorURL = URL(string: "http://s.fanyiou.com/public/ytdlp/latest.json")!
-        var mirrorRequest = URLRequest(url: mirrorURL)
-        mirrorRequest.timeoutInterval = 5
-        mirrorRequest.setValue("TransGull/1.0", forHTTPHeaderField: "User-Agent")
-        
-        let (mirrorData, mirrorResponse) = try await URLSession.shared.data(for: mirrorRequest)
-        
-        guard let httpResponse = mirrorResponse as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
-        
-        guard let json = try JSONSerialization.jsonObject(with: mirrorData) as? [String: Any],
-              let tagName = json["tag_name"] as? String else {
-            throw URLError(.cannotParseResponse)
-        }
-        
-        return tagName.replacingOccurrences(of: "v", with: "")
-    }
-    
-    func getLocalVersion() -> String? {
-        UserDefaults.standard.string(forKey: ytDlpVersionKey)
-    }
-
-    func setLocalVersion(_ version: String) {
-        UserDefaults.standard.set(version, forKey: ytDlpVersionKey)
     }
     
     func injectFakePopen(handler: PythonFunction) {
@@ -713,7 +603,7 @@ open class YoutubeDL: NSObject {
         }
     }
     
-    public static func downloadPythonModule(from url: URL = latestDownloadURL, completionHandler: @escaping (Swift.Error?) -> Void) {
+    public static func downloadPythonModule(from url: URL, completionHandler: @escaping (Swift.Error?) -> Void) {
         Task {
             do {
                 try await downloadPythonModule(from: url)
@@ -724,20 +614,9 @@ open class YoutubeDL: NSObject {
         }
     }
     
-    public static func downloadPythonModule(from url: URL = latestDownloadURL) async throws {
+    public static func downloadPythonModule(from url: URL) async throws {
         let stopWatch = StopWatch(); defer { stopWatch.report() }
-        
-        do {
-            try await downloadPythonModuleWithoutFallback(from: url)
-        } catch {
-            guard url != latestDownloadMirrorURL else {
-                throw error
-            }
-            try await downloadPythonModuleWithoutFallback(from: latestDownloadMirrorURL)
-        }
-    }
-    
-    private static func downloadPythonModuleWithoutFallback(from url: URL) async throws {
+
         let (location, response) = try await URLSession.shared.download(from: url)
         try validateDownloadResponse(response)
         try movePythonModule(location)
