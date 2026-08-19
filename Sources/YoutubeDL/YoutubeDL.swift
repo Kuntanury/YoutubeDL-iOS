@@ -422,10 +422,17 @@ open class YoutubeDL: NSObject {
     internal var options: PythonObject?
 
     private var extractionMode: ExtractionMode?
+    private let automaticallyUpdatesPythonModule: Bool
     
     private let ytDlpVersionKey = "yt_dlp_version"
     
     public override init() {
+        automaticallyUpdatesPythonModule = true
+        super.init()
+    }
+
+    public init(automaticallyUpdatesPythonModule: Bool) {
+        self.automaticallyUpdatesPythonModule = automaticallyUpdatesPythonModule
         super.init()
     }
     
@@ -437,6 +444,13 @@ open class YoutubeDL: NSObject {
         let moduleExists = FileManager.default.fileExists(
             atPath: Self.pythonModuleURL.path
         )
+
+        if !automaticallyUpdatesPythonModule {
+            guard moduleExists else {
+                throw YoutubeDLError.noPythonModule
+            }
+            return try importPythonModule()
+        }
 
         guard moduleExists || allowDownload else {
             throw YoutubeDLError.noPythonModule
